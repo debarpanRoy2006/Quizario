@@ -1,29 +1,8 @@
 from rest_framework import serializers
-from .models import Quiz, Question, Choice
+from .models import Quiz, Question, Choice, QuizSession
+from users.serializers import UserSerializer # Assuming your UserSerializer is in users/serializers.py
 
-# --- READ-ONLY SERIALIZERS (for fetching data) ---
-
-class ChoiceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Choice
-        fields = ['id', 'text'] 
-
-class QuestionSerializer(serializers.ModelSerializer):
-    choices = ChoiceSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Question
-        fields = ['id', 'text', 'time_limit', 'choices']
-
-class QuizSerializer(serializers.ModelSerializer):
-    questions = QuestionSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Quiz
-        fields = ['id', 'title', 'description', 'room_code', 'questions']
-
-
-# --- WRITE-ONLY SERIALIZERS (for creating data) ---
+# --- Serializers for CREATING a quiz ---
 
 class ChoiceCreateSerializer(serializers.ModelSerializer):
     class Meta:
@@ -43,7 +22,7 @@ class QuizCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Quiz
         fields = ['id', 'title', 'description', 'questions', 'room_code']
-        read_only_fields = ['room_code', 'id'] 
+        read_only_fields = ['room_code', 'id']
 
     def create(self, validated_data):
         questions_data = validated_data.pop('questions')
@@ -54,3 +33,34 @@ class QuizCreateSerializer(serializers.ModelSerializer):
             for choice_data in choices_data:
                 Choice.objects.create(question=question, **choice_data)
         return quiz
+
+# --- Serializers for READING quiz and session data ---
+
+class ChoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Choice
+        fields = ['id', 'text']
+
+class QuestionSerializer(serializers.ModelSerializer):
+    choices = ChoiceSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Question
+        fields = ['id', 'text', 'time_limit', 'choices']
+
+class QuizSerializer(serializers.ModelSerializer):
+    questions = QuestionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Quiz
+        fields = ['id', 'title', 'description', 'questions', 'room_code']
+        
+class QuizSessionSerializer(serializers.ModelSerializer):
+    participants = UserSerializer(many=True, read_only=True)
+    quiz = QuizSerializer(read_only=True)
+    host = UserSerializer(read_only=True)
+
+    class Meta:
+        model = QuizSession
+        fields = ['id', 'quiz', 'host', 'participants', 'status', 'room_code']
+

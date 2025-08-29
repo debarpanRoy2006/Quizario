@@ -6,7 +6,8 @@ from django.urls import path, include
 urlpatterns = [
     path('admin/', admin.site.urls),
     
-    # These are the only two app includes you need
-    path('api/quiz/', include('quiz.urls')), 
+    # --- CHANGE THIS LINE ---
+    path('api/quiz-sessions/', include('quiz.urls')), 
+    
     path('api/users/', include('users.urls')),
 ]

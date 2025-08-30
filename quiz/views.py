@@ -1,35 +1,51 @@
+from django.db.models import Sum
+from django.contrib.auth import get_user_model
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Quiz, Choice, QuizResult, QuizSession
-from .serializers import QuizSerializer, QuizCreateSerializer, QuizSessionSerializer
+from .serializers import (
+    QuizCreateSerializer,
+    QuizSessionSerializer,
+    LeaderboardSerializer
+)
 
-class QuizSessionViewSet(viewsets.ViewSet):
+User = get_user_model()
+
+class QuizSessionViewSet(viewsets.ModelViewSet):
     """
-    This ViewSet handles all actions related to a quiz session using custom actions.
+    ViewSet to manage all aspects of a quiz session, from hosting to completion.
     """
     queryset = QuizSession.objects.all()
+    serializer_class = QuizSessionSerializer
+
+    def get_serializer_class(self):
+        # Use a different serializer for the 'host_quiz' action
+        if self.action == 'host_quiz':
+            return QuizCreateSerializer
+        return QuizSessionSerializer
 
     @action(detail=False, methods=['post'], url_path='host')
     def host_quiz(self, request):
         """
-        Action to host a new quiz. This creates a Quiz and a QuizSession.
+        Creates a new Quiz and a QuizSession (lobby).
         """
-        create_serializer = QuizCreateSerializer(data=request.data)
+        create_serializer = self.get_serializer(data=request.data)
         create_serializer.is_valid(raise_exception=True)
         quiz = create_serializer.save(owner=request.user)
-
+        
+        # Create a new session for the quiz
         session = QuizSession.objects.create(quiz=quiz, host=request.user)
         session.participants.add(request.user)
-
-        # Explicitly use the correct serializer for the response
-        response_serializer = QuizSessionSerializer(session)
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        
+        # Use the standard session serializer for the response
+        session_serializer = QuizSessionSerializer(session)
+        return Response(session_serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['post'], url_path='join')
     def join_session(self, request):
         """
-        Action for a user to join an existing quiz session with a room code.
+        Allows a user to join an existing lobby using a room code.
         """
         room_code = request.data.get('room_code')
         if not room_code:
@@ -38,24 +54,24 @@ class QuizSessionViewSet(viewsets.ViewSet):
         try:
             session = QuizSession.objects.get(room_code__iexact=room_code, status='lobby')
             session.participants.add(request.user)
-            serializer = QuizSessionSerializer(session)
+            serializer = self.get_serializer(session)
             return Response(serializer.data)
         except QuizSession.DoesNotExist:
-            return Response({'error': 'Invalid room code or the session is not in the lobby.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Invalid room code or the lobby is closed.'}, status=status.HTTP_404_NOT_FOUND)
 
     @action(detail=True, methods=['get'], url_path='status')
     def lobby_status(self, request, pk=None):
         """
-        Action for clients to poll the lobby for updates on participants and game state.
+        Periodically checked by the frontend to get lobby updates.
         """
         session = self.get_object()
-        serializer = QuizSessionSerializer(session)
+        serializer = self.get_serializer(session)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='start')
     def start_game(self, request, pk=None):
         """
-        Action for the host to start the quiz. This changes the session status.
+        Allows the host to start the quiz for all participants.
         """
         session = self.get_object()
         if session.host != request.user:
@@ -63,12 +79,12 @@ class QuizSessionViewSet(viewsets.ViewSet):
         
         session.status = 'in_progress'
         session.save()
-        return Response({'message': 'Quiz started successfully.'})
+        return Response({'message': 'Quiz started.'})
 
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
         """
-        Action to submit answers for a quiz session.
+        Receives and scores a user's answers for a quiz within a session.
         """
         session = self.get_object()
         quiz = session.quiz
@@ -83,29 +99,27 @@ class QuizSessionViewSet(viewsets.ViewSet):
                 if user_choice_id and int(user_choice_id) == correct_choice.id:
                     score += 1
             except Choice.DoesNotExist:
-                pass
+                # This handles cases where a question might not have a correct answer marked.
+                pass 
         
+        # Create a record of the user's score for this quiz.
         QuizResult.objects.create(
-            user=request.user,
-            quiz=quiz,
-            score=score,
-            total_questions=total_questions
+            user=request.user, quiz=quiz, score=score, total_questions=total_questions
         )
-        
-        session.status = 'finished'
-        session.save()
+        return Response({'score': score, 'total_questions': total_questions})
 
-        return Response({
-            'score': score,
-            'total_questions': total_questions
-        })
-    
-    def get_object(self):
-        """Helper method to get the session object from the URL's primary key."""
-        queryset = self.get_queryset()
-        pk = self.kwargs.get('pk')
-        return queryset.get(pk=pk)
+    @action(detail=False, methods=['get'], url_path='leaderboard')
+    def leaderboard(self, request):
+        """
+        Calculates and returns the top 10 players based on total score.
+        """
+        user_scores = User.objects.annotate(
+            total_score=Sum('quizresult__score')
+        ).filter(
+            total_score__isnull=False
+        ).order_by(
+            '-total_score'
+        )[:10]
 
-    def get_queryset(self):
-        return QuizSession.objects.all()
-
+        serializer = LeaderboardSerializer(user_scores, many=True)
+        return Response(serializer.data)
